@@ -107,13 +107,15 @@ def _stop_monitor(log_dir):
 
         if psutil.pid_exists(pid):
             try:
-                os.kill(pid, signal.SIGTERM)
-                time.sleep(0.5)
-                if psutil.pid_exists(pid):
-                    os.kill(pid, signal.SIGKILL)
+                proc = psutil.Process(pid)
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except psutil.TimeoutExpired:
+                    proc.kill()
                 print(f"Stopped monitor process {pid}")
-            except ProcessLookupError:
-                print(f"Process {pid} no longer exists")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
         else:
             print(f"Process {pid} no longer running")
     except Exception as e:
@@ -123,6 +125,17 @@ def _stop_monitor(log_dir):
             os.remove(pid_file)
         except:
             pass
+
+def _check_already_running(log_dir):
+    pid_file = os.path.join(log_dir, '.monitor.pid')
+    if os.path.exists(pid_file):
+        try:
+            pid = int(open(pid_file).read().strip())
+            if psutil.pid_exists(pid):
+                return True
+        except:
+            pass
+    return False
 
 def main():
     if len(sys.argv) < 2:
@@ -134,16 +147,29 @@ def main():
     log_dir = os.path.join(os.path.dirname(script_dir), 'logs')
 
     if cmd == 'start':
+        if _check_already_running(log_dir):
+            print("Monitor already running")
+            return
+
+        monitor_script = os.path.abspath(__file__)
+        log_file = os.path.join(log_dir, 'monitor.log')
+
         if sys.platform == 'win32':
-            monitor_script = os.path.abspath(__file__)
-            subprocess.Popen(['python', monitor_script, '_run'],
-                           creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-            time.sleep(1)
-            print("Monitor started in background")
+            subprocess.Popen(
+                ['python', monitor_script, '_run'],
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+                stdout=open(log_file, 'a'),
+                stderr=subprocess.STDOUT
+            )
         else:
-            subprocess.Popen(['python', os.path.abspath(__file__), '_run'])
-            time.sleep(1)
-            print("Monitor started in background")
+            subprocess.Popen(
+                ['python', monitor_script, '_run'],
+                start_new_session=True,
+                stdout=open(log_file, 'a'),
+                stderr=subprocess.STDOUT
+            )
+        time.sleep(1)
+        print("Monitor started in background")
     elif cmd == '_run':
         monitor = CPUMonitor(log_dir=log_dir)
         monitor.start()

@@ -12,3 +12,36 @@ jobs:
           python-version: '3.10'
       - run: pip install -r requirements.txt
       - run: python -m py_compile src/monitor.py
+      - name: Smoke Test - Start
+        run: python src/monitor.py start
+      - name: Wait startup
+        run: Start-Sleep -Seconds 3
+      - name: Check PID file
+        run: |
+          if (Test-Path logs\.monitor.pid) {
+            Write-Host "✓ PID file created"
+          } else {
+            Write-Error "✗ PID file missing"; exit 1
+          }
+      - name: Check CSV file
+        run: |
+          $csv = @(Get-ChildItem logs\cpu_monitor_*.csv -EA SilentlyContinue)
+          if ($csv) {
+            $lines = @(Get-Content $csv[0])
+            Write-Host "✓ CSV created with $($lines.Count) lines"
+            if ($lines.Count -le 1) { Write-Error "✗ CSV empty"; exit 1 }
+          } else {
+            Write-Error "✗ CSV not found"; exit 1
+          }
+      - name: Smoke Test - Stop
+        run: python src/monitor.py stop
+      - name: Wait shutdown
+        run: Start-Sleep -Seconds 2
+      - name: Verify CSV persisted
+        run: |
+          $csv = @(Get-ChildItem logs\cpu_monitor_*.csv -EA SilentlyContinue)
+          if ($csv) {
+            Write-Host "✓ CSV data persisted"
+          } else {
+            Write-Error "✗ CSV lost"; exit 1
+          }
