@@ -45,6 +45,8 @@ class CPUMonitor:
             print("Monitor already running")
             return
 
+        os.makedirs(self.log_dir, exist_ok=True)
+
         with open(self.pid_file, 'w') as f:
             f.write(str(os.getpid()))
 
@@ -151,6 +153,7 @@ def main():
             print("Monitor already running")
             return
 
+        os.makedirs(log_dir, exist_ok=True)
         monitor_script = os.path.abspath(__file__)
         log_file = os.path.join(log_dir, 'monitor.log')
 
