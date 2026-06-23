@@ -1,2 +1,2 @@
 Set-Location $PSScriptRoot
-python src/monitor.py start
+& python src/monitor.py start

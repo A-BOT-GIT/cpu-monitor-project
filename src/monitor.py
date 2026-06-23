@@ -5,12 +5,16 @@ import csv
 import time
 import sys
 import os
+import subprocess
 from datetime import datetime
 import signal
 import atexit
 
 class CPUMonitor:
-    def __init__(self, log_dir='../logs', interval=5):
+    def __init__(self, log_dir=None, interval=5):
+        if log_dir is None:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            log_dir = os.path.join(os.path.dirname(script_dir), 'logs')
         self.log_dir = log_dir
         self.interval = interval
         self.running = False
@@ -28,7 +32,7 @@ class CPUMonitor:
         sys.exit(0)
 
     def _cleanup(self):
-        if self.csv_file:
+        if self.csv_file and not self.csv_file.closed:
             self.csv_file.close()
         if os.path.exists(self.pid_file):
             try:
@@ -41,7 +45,6 @@ class CPUMonitor:
             print("Monitor already running")
             return
 
-        # Write PID for stop command
         with open(self.pid_file, 'w') as f:
             f.write(str(os.getpid()))
 
@@ -75,7 +78,6 @@ class CPUMonitor:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
 
-        # Sort by CPU % descending and write top 50
         processes.sort(key=lambda x: x['cpu_percent'], reverse=True)
         for pinfo in processes[:50]:
             self.csv_writer.writerow([
@@ -88,33 +90,67 @@ class CPUMonitor:
         self.csv_file.flush()
 
     def stop(self):
+        if self.csv_file and not self.csv_file.closed:
+            self.csv_file.flush()
+            self.csv_file.close()
         self.running = False
-        print("CPU Monitor stopped")
+
+def _stop_monitor(log_dir):
+    pid_file = os.path.join(log_dir, '.monitor.pid')
+    if not os.path.exists(pid_file):
+        print("Monitor not running")
+        return
+
+    try:
+        with open(pid_file, 'r') as f:
+            pid = int(f.read().strip())
+
+        if psutil.pid_exists(pid):
+            try:
+                os.kill(pid, signal.SIGTERM)
+                time.sleep(0.5)
+                if psutil.pid_exists(pid):
+                    os.kill(pid, signal.SIGKILL)
+                print(f"Stopped monitor process {pid}")
+            except ProcessLookupError:
+                print(f"Process {pid} no longer exists")
+        else:
+            print(f"Process {pid} no longer running")
+    except Exception as e:
+        print(f"Error stopping monitor: {e}")
+    finally:
+        try:
+            os.remove(pid_file)
+        except:
+            pass
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python monitor.py [start|stop]")
+        print("Usage: python monitor.py [start|stop|_run]")
         sys.exit(1)
 
     cmd = sys.argv[1].lower()
-    monitor = CPUMonitor()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(os.path.dirname(script_dir), 'logs')
 
     if cmd == 'start':
+        if sys.platform == 'win32':
+            monitor_script = os.path.abspath(__file__)
+            subprocess.Popen(['python', monitor_script, '_run'],
+                           creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+            time.sleep(1)
+            print("Monitor started in background")
+        else:
+            subprocess.Popen(['python', os.path.abspath(__file__), '_run'])
+            time.sleep(1)
+            print("Monitor started in background")
+    elif cmd == '_run':
+        monitor = CPUMonitor(log_dir=log_dir)
         monitor.start()
     elif cmd == 'stop':
-        pid_file = os.path.join(monitor.log_dir, '.monitor.pid')
-        if os.path.exists(pid_file):
-            try:
-                with open(pid_file, 'r') as f:
-                    pid = int(f.read().strip())
-                os.kill(pid, signal.SIGTERM)
-                print(f"Stopped monitor process {pid}")
-            except Exception as e:
-                print(f"Error stopping monitor: {e}")
-        else:
-            print("Monitor not running")
+        _stop_monitor(log_dir)
     else:
-        print("Unknown command. Use 'start' or 'stop'")
+        print("Unknown command. Use 'start', 'stop', or '_run'")
         sys.exit(1)
 
 if __name__ == '__main__':
