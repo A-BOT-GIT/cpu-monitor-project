@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 class CPUDashboard:
     def __init__(self, log_dir='../logs'):
         self.log_dir = log_dir
-        self.process_data = defaultdict(list)
+        self.process_data = {}
         self.monitor_cpu_history = []
         self.monitor_mem_history = []
         self.timestamps = []
@@ -21,43 +21,72 @@ class CPUDashboard:
         self.setup_layout()
         self.setup_callbacks()
 
+    def _csv_sort_key(self, csv_path):
+        basename = os.path.basename(csv_path)
+        try:
+            timestamp = basename.removeprefix('cpu_monitor_').removesuffix('.csv')
+            return (datetime.strptime(timestamp, '%Y%m%d_%H%M%S'), os.path.getmtime(csv_path))
+        except ValueError:
+            return (datetime.fromtimestamp(0), os.path.getmtime(csv_path))
+
+    def _parse_cpu_percent(self, value):
+        return max(0.0, min(float(value), 100.0))
+
+    def _parse_float(self, value):
+        return float(value)
+
     def read_latest_csv(self):
         csv_files = glob.glob(os.path.join(self.log_dir, 'cpu_monitor_*.csv'))
         if not csv_files:
             return False
 
-        latest_csv = max(csv_files, key=os.path.getctime)
+        latest_csv = max(csv_files, key=self._csv_sort_key)
 
-        self.process_data = defaultdict(list)
-        self.monitor_cpu_history = []
-        self.monitor_mem_history = []
-        self.timestamps = []
+        temp_process_data = defaultdict(lambda: {})
+        temp_monitor_data = {}
+        ordered_timestamps = []
+        timestamp_set = set()
 
         with open(latest_csv, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                key = (row['Process Name'], row['PID'])
-                try:
-                    cpu = float(row['CPU %'])
-                    if cpu > 0:
-                        self.process_data[key].append(cpu)
+                timestamp = (row.get('Timestamp') or '').strip()
+                if not timestamp:
+                    continue
 
-                    self.monitor_cpu_history.append(float(row['Monitor CPU %']))
-                    self.monitor_mem_history.append(float(row['Monitor Memory MB']))
-                    if row['Timestamp'] not in self.timestamps:
-                        self.timestamps.append(row['Timestamp'])
-                except (ValueError, KeyError):
+                if timestamp not in timestamp_set:
+                    try:
+                        temp_monitor_data[timestamp] = (
+                            self._parse_cpu_percent(row.get('Monitor CPU %')),
+                            self._parse_float(row.get('Monitor Memory MB'))
+                        )
+                        ordered_timestamps.append(timestamp)
+                        timestamp_set.add(timestamp)
+                    except (TypeError, ValueError):
+                        pass
+
+                process_name = (row.get('Process Name') or '').strip()
+                pid = (row.get('PID') or '').strip()
+                if not process_name or not pid:
+                    continue
+
+                try:
+                    temp_process_data[(process_name, pid)][timestamp] = self._parse_cpu_percent(row.get('CPU %'))
+                except (TypeError, ValueError):
                     pass
 
-        for key in self.process_data:
-            if len(self.process_data[key]) > 600:
-                self.process_data[key] = self.process_data[key][-600:]
+        if len(ordered_timestamps) > 600:
+            ordered_timestamps = ordered_timestamps[-600:]
 
-        if len(self.monitor_cpu_history) > 600:
-            self.monitor_cpu_history = self.monitor_cpu_history[-600:]
-            self.monitor_mem_history = self.monitor_mem_history[-600:]
+        self.timestamps = ordered_timestamps
+        self.monitor_cpu_history = [temp_monitor_data[ts][0] for ts in self.timestamps]
+        self.monitor_mem_history = [temp_monitor_data[ts][1] for ts in self.timestamps]
 
-        return True
+        self.process_data = {}
+        for key in temp_process_data:
+            self.process_data[key] = [temp_process_data[key].get(ts, 0) for ts in self.timestamps]
+
+        return bool(self.timestamps)
 
     def get_top_5_processes(self):
         avg_cpu = {k: sum(v) / len(v) for k, v in self.process_data.items()}
@@ -70,6 +99,7 @@ class CPUDashboard:
         for idx, (proc_id, _) in enumerate(self.get_top_5_processes()):
             data = self.process_data[proc_id]
             fig.add_trace(go.Scatter(
+                x=self.timestamps,
                 y=data,
                 mode='lines',
                 name=f'{proc_id[0]} ({proc_id[1]})',
@@ -79,7 +109,7 @@ class CPUDashboard:
 
         fig.update_layout(
             title='Top 5 Processes - CPU Usage Over Time',
-            xaxis_title='Sample Index',
+            xaxis_title='Time (last 10 minutes)',
             yaxis_title='CPU %',
             hovermode='x unified',
             template='plotly_white',
@@ -154,8 +184,8 @@ class CPUDashboard:
                     'Process': proc_name,
                     'PID': pid,
                     'Avg CPU %': f"{sum(cpu_data) / len(cpu_data):.2f}" if cpu_data else "0.00",
-                    'Max CPU %': f"{max(cpu_data):.2f}" if cpu_data else "0.00",
-                    'Samples': len(cpu_data)
+                    'Max CPU %': f"{min(max(cpu_data), 100.0):.2f}" if cpu_data else "0.00",
+                    'Samples': int(len(cpu_data))
                 })
                 seen.add((proc_name, pid))
 
@@ -245,7 +275,7 @@ class CPUDashboard:
                 return empty_fig, empty_fig, html.Tr(html.Td('No data available'))
 
     def run(self, debug=False):
-        self.app.run_server(debug=debug, host='127.0.0.1', port=8050)
+        self.app.run(debug=debug, host='127.0.0.1', port=8050)
 
 if __name__ == '__main__':
     dashboard = CPUDashboard()
