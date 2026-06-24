@@ -90,7 +90,9 @@ class CPUDashboard:
 
     def get_top_5_processes(self):
         avg_cpu = {k: sum(v) / len(v) for k, v in self.process_data.items()}
-        return sorted(avg_cpu.items(), key=lambda x: x[1], reverse=True)[:5]
+        sorted_procs = sorted(avg_cpu.items(), key=lambda x: x[1], reverse=True)
+        filtered = [p for p in sorted_procs if p[0][0].lower() != 'system idle process']
+        return filtered[:5]
 
     def create_top5_chart(self):
         fig = go.Figure()
@@ -178,8 +180,8 @@ class CPUDashboard:
             self.process_data.items(),
             key=lambda x: (sum(x[1]) / len(x[1])) if x[1] else 0,
             reverse=True
-        )[:10]:
-            if (proc_name, pid) not in seen:
+        ):
+            if (proc_name, pid) not in seen and proc_name.lower() != 'system idle process':
                 rows.append({
                     'Process': proc_name,
                     'PID': pid,
@@ -188,6 +190,8 @@ class CPUDashboard:
                     'Samples': int(len(cpu_data))
                 })
                 seen.add((proc_name, pid))
+                if len(rows) >= 10:
+                    break
 
         return rows
 
