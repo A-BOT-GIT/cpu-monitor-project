@@ -10,13 +10,17 @@ import signal
 import atexit
 
 class CPUMonitor:
-    def __init__(self, log_dir='../logs', interval=5):
+    def __init__(self, log_dir='../logs', interval=1):
         self.log_dir = log_dir
         self.interval = interval
         self.running = False
         self.csv_file = None
         self.csv_writer = None
         self.pid_file = os.path.join(log_dir, '.monitor.pid')
+        self.monitor_pid = os.getpid()
+        self.sample_count = 0
+        self.self_cpu_history = []
+        self.self_mem_history = []
 
         os.makedirs(log_dir, exist_ok=True)
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -50,7 +54,7 @@ class CPUMonitor:
 
         self.csv_file = open(csv_path, 'w', newline='', encoding='utf-8')
         self.csv_writer = csv.writer(self.csv_file)
-        self.csv_writer.writerow(['Timestamp', 'Process Name', 'PID', 'CPU %'])
+        self.csv_writer.writerow(['Timestamp', 'Process Name', 'PID', 'CPU %', 'Monitor CPU %', 'Monitor Memory MB'])
         self.csv_file.flush()
 
         self.running = True
@@ -65,8 +69,21 @@ class CPUMonitor:
 
     def _sample(self):
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        processes = []
+        self.sample_count += 1
 
+        try:
+            self_proc = psutil.Process(self.monitor_pid)
+            self_cpu = self_proc.cpu_percent(interval=0.1)
+            self_mem = self_proc.memory_info().rss / (1024 * 1024)
+            self.self_cpu_history.append(self_cpu)
+            self.self_mem_history.append(self_mem)
+            if len(self.self_cpu_history) > 600:
+                self.self_cpu_history.pop(0)
+                self.self_mem_history.pop(0)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            self_cpu, self_mem = 0, 0
+
+        processes = []
         for proc in psutil.process_iter(['pid', 'name', 'cpu_percent']):
             try:
                 pinfo = proc.as_dict(attrs=['pid', 'name', 'cpu_percent'])
@@ -75,17 +92,23 @@ class CPUMonitor:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
 
-        # Sort by CPU % descending and write top 50
         processes.sort(key=lambda x: x['cpu_percent'], reverse=True)
         for pinfo in processes[:50]:
             self.csv_writer.writerow([
                 now,
                 pinfo['name'],
                 pinfo['pid'],
-                f"{pinfo['cpu_percent']:.2f}"
+                f"{pinfo['cpu_percent']:.2f}",
+                f"{self_cpu:.2f}",
+                f"{self_mem:.2f}"
             ])
 
         self.csv_file.flush()
+
+        if self.sample_count % 100 == 0:
+            avg_cpu = sum(self.self_cpu_history) / len(self.self_cpu_history) if self.self_cpu_history else 0
+            avg_mem = sum(self.self_mem_history) / len(self.self_mem_history) if self.self_mem_history else 0
+            print(f"[Report @ {self.sample_count} samples] Monitor - Avg CPU: {avg_cpu:.2f}%, Avg Memory: {avg_mem:.2f}MB")
 
     def stop(self):
         self.running = False
