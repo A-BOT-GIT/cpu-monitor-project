@@ -1,2 +1,4 @@
 psutil>=5.9.0
 matplotlib>=3.5.0
+plotly>=5.0
+dash>=2.0
